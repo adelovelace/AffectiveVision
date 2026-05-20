@@ -33,8 +33,8 @@ def parse_args():
     source_group.add_argument("--video", type=str, help="Path to a video file.")
     source_group.add_argument("--camera", action="store_true", help="Use the webcam. This is the default if no source is given.")
 
-    parser.add_argument("--checkpoint", type=str, default="./outputs/checkpoints/custom/fer2013_best.pth")
-    parser.add_argument("--model", type=str, default="custom", choices=["custom", "mobilenet", "inception"])
+     parser.add_argument("--checkpoint", type=str, default="./outputs/checkpoints/mobilenet/fer2013_frozen80_best.pth")
+    parser.add_argument("--model", type=str, default="mobilenet", choices=["custom", "mobilenet", "inception"])
     parser.add_argument("--dataset", type=str, default="fer2013", choices=["fer2013", "ckplus"])
     parser.add_argument("--class-names", type=str, default="", help="Comma-separated labels. Overrides --dataset.")
     parser.add_argument("--img-size", type=int, default=None, help="Override input size. Defaults: custom=48, mobilenet=224, inception=299.")
