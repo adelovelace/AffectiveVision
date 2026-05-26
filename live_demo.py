@@ -33,7 +33,7 @@ def parse_args():
     source_group.add_argument("--video", type=str, help="Path to a video file.")
     source_group.add_argument("--camera", action="store_true", help="Use the webcam. This is the default if no source is given.")
 
-     parser.add_argument("--checkpoint", type=str, default="./outputs/checkpoints/mobilenet/fer2013_frozen80_best.pth")
+    parser.add_argument("--checkpoint", type=str, default="./outputs/checkpoints/mobilenet/fer2013_frozen80_best.pth")
     parser.add_argument("--model", type=str, default="mobilenet", choices=["custom", "mobilenet", "inception"])
     parser.add_argument("--dataset", type=str, default="fer2013", choices=["fer2013", "ckplus"])
     parser.add_argument("--class-names", type=str, default="", help="Comma-separated labels. Overrides --dataset.")
@@ -45,9 +45,11 @@ def parse_args():
     parser.add_argument("--frame-step", type=int, default=5, help="For videos, process every Nth frame.")
     parser.add_argument("--smooth-window", type=int, default=7, help="Rolling window for stable webcam/video labels.")
     parser.add_argument("--min-face-size", type=int, default=50)
+    parser.add_argument("--max-faces", type=int, default=0, help="Maximum faces to annotate. 0 means all detected faces.")
     parser.add_argument("--max-frames", type=int, default=0, help="Optional limit for video/camera frames. 0 means no limit.")
 
-    parser.add_argument("--gradcam", action="store_true", help="Add Grad-CAM overlay for single-image demos.")
+    parser.add_argument("--gradcam", action="store_true", help="Add Grad-CAM overlay for image, video, or webcam demos.")
+    parser.add_argument("--gradcam-step", type=int, default=10, help="For streams, update Grad-CAM every N processed frames.")
     parser.add_argument("--tts", action="store_true", help="Speak emotion changes during webcam demos.")
     parser.add_argument("--no-display", action="store_true", help="Do not open an OpenCV display window.")
     parser.add_argument("--output", type=str, default="", help="Output image/video path. If omitted, a sensible default is used.")
@@ -147,7 +149,7 @@ def require_cv2():
         raise ImportError("OpenCV is required for live_demo.py. Install it with: pip install opencv-python")
 
 
-def detect_largest_face(frame_bgr, detector, min_face_size):
+def detect_faces(frame_bgr, detector, min_face_size, max_faces=0):
     gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
     faces = detector.detectMultiScale(
         gray,
@@ -156,8 +158,17 @@ def detect_largest_face(frame_bgr, detector, min_face_size):
         minSize=(min_face_size, min_face_size),
     )
     if len(faces) == 0:
-        return None
-    return max(faces, key=lambda box: box[2] * box[3])
+        return []
+
+    faces = sorted(faces, key=lambda box: box[2] * box[3], reverse=True)
+    if max_faces > 0:
+        faces = faces[:max_faces]
+    return faces
+
+
+def detect_largest_face(frame_bgr, detector, min_face_size):
+    faces = detect_faces(frame_bgr, detector, min_face_size, max_faces=1)
+    return faces[0] if faces else None
 
 
 def crop_with_margin(frame_bgr, box, margin_ratio):
@@ -215,6 +226,27 @@ def annotate_frame(frame, box, label, confidence, probabilities, class_names):
     label_text = f"{label}: {confidence:.1%}"
     cv2.putText(frame, label_text, (10, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 220, 80), 2, cv2.LINE_AA)
     draw_probability_panel(frame, probabilities, class_names, origin=(10, max(text_y + 36, 64)))
+    return frame
+
+
+def annotate_face_label(frame, box, label, confidence):
+    if box is None:
+        return frame
+
+    x1, y1, x2, y2 = box
+    text = f"{label}: {confidence:.1%}"
+    text_y = max(y1 - 10, 24)
+
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 80), 2)
+    (text_w, text_h), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
+    cv2.rectangle(
+        frame,
+        (x1, text_y - text_h - baseline - 4),
+        (x1 + text_w + 8, text_y + baseline),
+        (20, 20, 20),
+        -1,
+    )
+    cv2.putText(frame, text, (x1 + 4, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 220, 80), 2, cv2.LINE_AA)
     return frame
 
 
@@ -284,6 +316,30 @@ def make_gradcam_overlay(model, face_bgr, transform, device, pred_idx):
     return cv2.addWeighted(face_bgr, 0.55, heatmap_color, 0.45, 0)
 
 
+def draw_gradcam_preview(frame, gradcam_overlay, title="Grad-CAM"):
+    if gradcam_overlay is None:
+        return frame
+
+    preview_w = min(220, max(frame.shape[1] // 4, 140))
+    scale = preview_w / gradcam_overlay.shape[1]
+    preview_h = max(1, int(gradcam_overlay.shape[0] * scale))
+    preview = cv2.resize(gradcam_overlay, (preview_w, preview_h))
+
+    pad = 12
+    title_h = 24
+    x2 = frame.shape[1] - pad
+    y2 = frame.shape[0] - pad
+    x1 = max(x2 - preview_w, 0)
+    y1 = max(y2 - preview_h - title_h, 0)
+
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x1 - 6, y1 - 6), (x2 + 6, y2 + 6), (20, 20, 20), -1)
+    cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, frame)
+    cv2.putText(frame, title, (x1, y1 + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (245, 245, 245), 1, cv2.LINE_AA)
+    frame[y1 + title_h:y1 + title_h + preview_h, x1:x1 + preview_w] = preview
+    return frame
+
+
 class EmotionSpeaker:
     def __init__(self, enabled):
         self.enabled = enabled
@@ -347,23 +403,39 @@ def run_image_demo(args, model, transform, detector, class_names, device):
     if original is None:
         raise RuntimeError(f"OpenCV could not read image: {image_path}")
 
-    box = None if detector is None else detect_largest_face(original, detector, args.min_face_size)
-    face_crop, expanded_box = crop_with_margin(original, box, args.margin)
-    if box is None:
-        print("[!] No face detected; using the full image.")
+    if detector is None:
+        face_inputs = [(original, None)]
+    else:
+        boxes = detect_faces(original, detector, args.min_face_size, args.max_faces)
+        face_inputs = [crop_with_margin(original, box, args.margin) for box in boxes]
+        if not face_inputs:
+            print("[!] No face detected; using the full image.")
+            face_inputs = [(original, None)]
 
-    pred_idx, probabilities = predict_frame(model, face_crop, transform, device)
-    label = class_names[pred_idx]
-    confidence = float(probabilities[pred_idx])
+    annotated = original.copy()
+    predictions = []
+    for face_idx, (face_crop, expanded_box) in enumerate(face_inputs, start=1):
+        pred_idx, probabilities = predict_frame(model, face_crop, transform, device)
+        label = class_names[pred_idx]
+        confidence = float(probabilities[pred_idx])
+        predictions.append((face_idx, face_crop, expanded_box, pred_idx, probabilities, label, confidence))
 
-    annotated = annotate_frame(original.copy(), expanded_box, label, confidence, probabilities, class_names)
+        if expanded_box is not None:
+            annotate_face_label(annotated, expanded_box, label, confidence)
+        else:
+            annotate_frame(annotated, expanded_box, label, confidence, probabilities, class_names)
+
+    primary = predictions[0]
+    _, primary_crop, _, primary_pred_idx, primary_probabilities, primary_label, primary_confidence = primary
+    if primary[2] is not None:
+        draw_probability_panel(annotated, primary_probabilities, class_names, origin=(10, 64))
 
     if args.gradcam:
         try:
-            gradcam_overlay = make_gradcam_overlay(model, face_crop, transform, device, pred_idx)
+            gradcam_overlay = make_gradcam_overlay(model, primary_crop, transform, device, primary_pred_idx)
             gradcam_overlay = cv2.resize(gradcam_overlay, (original.shape[1] // 2, original.shape[0] // 2))
             annotated[-gradcam_overlay.shape[0]:, -gradcam_overlay.shape[1]:] = gradcam_overlay
-            print("[!] Grad-CAM overlay added in the bottom-right corner.")
+            print("[!] Grad-CAM overlay added for the primary/largest face in the bottom-right corner.")
         except Exception as exc:
             print(f"[!] Grad-CAM skipped: {exc}")
 
@@ -371,10 +443,12 @@ def run_image_demo(args, model, transform, detector, class_names, device):
     output.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(output), annotated)
 
-    print("\nPrediction probabilities:")
-    for name, prob in sorted(zip(class_names, probabilities), key=lambda item: item[1], reverse=True):
-        print(f"  {name:>10s}: {prob:.4f}")
-    print(f"\n[!] Predicted emotion: {label} ({confidence:.1%})")
+    print("\nPredictions:")
+    for face_idx, _, _, _, probabilities, label, confidence in predictions:
+        print(f"  Face {face_idx}: {label} ({confidence:.1%})")
+        for name, prob in sorted(zip(class_names, probabilities), key=lambda item: item[1], reverse=True):
+            print(f"    {name:>10s}: {prob:.4f}")
+    print(f"\n[!] Primary predicted emotion: {primary_label} ({primary_confidence:.1%})")
     print(f"[!] Saved annotated image to: {output.resolve()}")
 
     if not args.no_display:
@@ -420,7 +494,9 @@ def run_stream_demo(args, model, transform, detector, class_names, device):
     frame_idx = 0
     processed_predictions = []
     last_probabilities = np.ones(len(class_names), dtype=np.float32) / len(class_names)
-    last_box = None
+    last_detections = []
+    last_gradcam_overlay = None
+    gradcam_warning_printed = False
 
     writer = None
     if args.save_frames:
@@ -449,22 +525,48 @@ def run_stream_demo(args, model, transform, detector, class_names, device):
             frame_idx += 1
 
             if should_process:
-                box = None if detector is None else detect_largest_face(frame, detector, args.min_face_size)
-                face_crop, expanded_box = crop_with_margin(frame, box, args.margin)
-                last_box = expanded_box
+                if detector is None:
+                    face_inputs = [(frame, None)]
+                else:
+                    boxes = detect_faces(frame, detector, args.min_face_size, args.max_faces)
+                    face_inputs = [crop_with_margin(frame, box, args.margin) for box in boxes]
 
-                if box is not None or args.no_face_crop:
+                current_detections = []
+                for face_idx, (face_crop, expanded_box) in enumerate(face_inputs):
                     pred_idx, probabilities = predict_frame(model, face_crop, transform, device)
-                    last_probabilities = probabilities
-                    label_window.append(class_names[pred_idx])
-                    processed_predictions.append(class_names[pred_idx])
+                    label = class_names[pred_idx]
+                    confidence = float(probabilities[pred_idx])
+                    current_detections.append((expanded_box, label, confidence, probabilities))
 
-            if label_window:
-                label = Counter(label_window).most_common(1)[0][0]
-                label_idx = class_names.index(label)
-                confidence = float(last_probabilities[label_idx])
-                speaker.maybe_speak(label)
-                annotate_frame(frame, last_box, label, confidence, last_probabilities, class_names)
+                    if face_idx == 0:
+                        last_probabilities = probabilities
+                        label_window.append(label)
+                        if args.gradcam and len(processed_predictions) % max(args.gradcam_step, 1) == 0:
+                            try:
+                                last_gradcam_overlay = make_gradcam_overlay(model, face_crop, transform, device, pred_idx)
+                            except Exception as exc:
+                                if not gradcam_warning_printed:
+                                    print(f"[!] Stream Grad-CAM disabled after error: {exc}")
+                                    gradcam_warning_printed = True
+                                last_gradcam_overlay = None
+
+                    processed_predictions.append(label)
+
+                last_detections = current_detections
+
+            if last_detections:
+                primary_box, primary_label, primary_confidence, primary_probabilities = last_detections[0]
+                speaker.maybe_speak(primary_label)
+                for box, label, confidence, _ in last_detections:
+                    if box is not None:
+                        annotate_face_label(frame, box, label, confidence)
+                    else:
+                        annotate_frame(frame, box, label, confidence, primary_probabilities, class_names)
+
+                if primary_box is not None:
+                    draw_probability_panel(frame, primary_probabilities, class_names, origin=(10, 64))
+                if args.gradcam:
+                    draw_gradcam_preview(frame, last_gradcam_overlay)
             else:
                 cv2.putText(frame, "No face detected", (10, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 220, 255), 2, cv2.LINE_AA)
 
