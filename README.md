@@ -258,13 +258,5 @@ python live_demo.py \
 
 Press `q`, `Q`, or `Esc` while the OpenCV video window is focused to quit the webcam demo.
 
-## Demo Video
-
-If you want to view the demo without running the webcam locally, use the recorded demo video:
-
-```text
-Add demo video link here, for example a GitHub Release asset, Google Drive link, or YouTube/unlisted link.
-```
-
 ---
 *MIT License | Copyright (c) 2026*
