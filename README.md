@@ -55,24 +55,92 @@ The framework is highly modular, supporting three primary architectural paradigm
     └── training_utils.py     # Gradient clipping boundaries and custom step-based LR decay rules
 ```
 
+## Quick Summary
+
+This repository contains the code for **AffectiveVision**, a Computer Vision project for Facial Expression Recognition (FER). We compare three CNN-recurrent architectures:
+
+* **InceptionV3-LSTM**: high-capacity transfer learning baseline.
+* **MobileNetV2-LSTM**: lightweight transfer learning model for faster inference and the live demo.
+* **Custom CNN-GRU**: compact model trained from scratch on FER2013/CK+ style inputs.
+
+The project includes:
+
+* training on FER2013 and CK+,
+* experiment tracking with Weights & Biases,
+* Grad-CAM visual explanations,
+* video-level generalization on DepVidMood,
+* a live webcam/image/video demo with OpenCV face detection and PyTorch inference.
+
 ## Setup & Dependencies
 
 ```bash
 # Clone the repository
-git clone https://github.com/adelovelace/AffectiveVision.git
+git clone https://github.com/YOUR_USERNAME/AffectiveVision.git
 cd AffectiveVision
 
 # Create a virtual environment (Python 3.10+ recommended)
 conda create -n cv_env python=3.10
 conda activate cv_env
 
-# Install core dependencies 
-# (Note: Use opencv-python-headless if executing on Linux clusters/Singularity)
+# Install core dependencies
 pip install -r requirements.txt
-pip install pyttsx3 # Required for auditory feedback in local live_demo.py
+```
 
+If PyTorch installation fails because of your operating system or hardware, install it from the official selector first, then rerun `pip install -r requirements.txt`:
+
+```bash
+pip install torch torchvision
+pip install -r requirements.txt
+```
+
+On Linux clusters or headless servers, replace `opencv-python` with `opencv-python-headless`.
+
+Weights & Biases is only required for training/logging:
+
+```bash
 # Authenticate the MLOps Dashboard
 wandb login
+```
+
+## Pretrained Checkpoints
+
+Model checkpoints are **not committed to git** because they are large binary files. To run the live demo without retraining, download the checkpoint archive from the project release page:
+
+```text
+https://github.com/YOUR_USERNAME/AffectiveVision/releases
+```
+
+Download:
+
+```text
+affectivevision_checkpoints.zip
+```
+
+Then unzip it from the repository root:
+
+```bash
+unzip affectivevision_checkpoints.zip
+```
+
+After unzipping, the checkpoint folder should look like this:
+
+```text
+outputs/checkpoints/
+├── best_inception_fer2013.pth
+├── custom/
+│   ├── ckplus_best.pth
+│   └── fer2013_best.pth
+├── inception/
+│   └── ckplus_frozen80_best.pth
+└── mobilenet/
+    ├── ckplus_frozen80_best.pth
+    └── fer2013_frozen80_best.pth
+```
+
+The recommended checkpoint for the real-time demo is:
+
+```text
+outputs/checkpoints/mobilenet/fer2013_frozen80_best.pth
 ```
 
 ## Usage & Execution Documentation
@@ -99,13 +167,103 @@ nohup ./run_experiments.sh > pipeline_output.log 2>&1 &
 Automate the downloading and processing of raw `.mp4/.avi` datasets utilizing the temporal sequence aggregation engine.
 ```bash
 python download_videos.py  # Fetches DepVidMood from the Kaggle registry
-python video_evaluator.py  # Executes face extraction, frame decimation, and majority-vote inference
+python video_evaluator.py \
+  --video-dir data/depvidmood \
+  --checkpoint outputs/checkpoints/mobilenet/fer2013_frozen80_best.pth \
+  --model mobilenet \
+  --dataset fer2013 \
+  --device cpu \
+  --frame-step 5 \
+  --save-timelines \
+  --output-dir outputs/video_results/mobilenet_fer2013 \
+  --pseudo-labels
+```
+
+The evaluator treats DepVidMood as an unlabelled generalization set. It saves:
+* `outputs/video_results/video_summary.csv`: one row per video with majority-vote prediction, face detection rate, confidence, and average class probabilities.
+* `outputs/video_results/timelines/`: optional per-video probability timelines.
+* `outputs/video_results/pseudo_labels.csv`: optional high-confidence pseudo-label candidates, filtered by majority ratio and confidence.
+
+To also save annotated videos:
+```bash
+python video_evaluator.py \
+  --video-dir data/depvidmood \
+  --checkpoint outputs/checkpoints/mobilenet/fer2013_frozen80_best.pth \
+  --model mobilenet \
+  --dataset fer2013 \
+  --device cpu \
+  --frame-step 5 \
+  --output-dir outputs/video_results/mobilenet_fer2013_annotated \
+  --save-annotated
+```
+
+To plot the video-level emotion distributions from generated `video_summary.csv` files:
+
+```bash
+python plot_video_distributions.py
+```
+
+This saves count and percentage plots as `.png` and `.pdf` under:
+
+```text
+outputs/video_results/distribution_plots/
 ```
 
 ### 4. Real-Time Hardware Inference
-*Note: This script requires a local machine with accessible camera and audio peripherals.*
+*Note: Webcam display requires a local machine with an accessible camera. Audio feedback is optional via `--tts`.*
+
+Image demo with an annotated prediction panel:
 ```bash
-python live_demo.py
+python live_demo.py \
+  --image path/to/image.jpg \
+  --checkpoint outputs/checkpoints/mobilenet/fer2013_frozen80_best.pth \
+  --model mobilenet \
+  --dataset fer2013 \
+  --device cpu \
+  --gradcam
+```
+
+Video-file demo with majority voting:
+```bash
+python live_demo.py \
+  --video path/to/video.mp4 \
+  --checkpoint outputs/checkpoints/mobilenet/fer2013_frozen80_best.pth \
+  --model mobilenet \
+  --dataset fer2013 \
+  --device cpu \
+  --frame-step 5 \
+  --save-frames
+```
+
+Webcam demo:
+```bash
+python live_demo.py \
+  --checkpoint outputs/checkpoints/mobilenet/fer2013_frozen80_best.pth \
+  --model mobilenet \
+  --dataset fer2013 \
+  --device cpu
+```
+
+Webcam demo with Grad-CAM and multiple detected faces:
+
+```bash
+python live_demo.py \
+  --checkpoint outputs/checkpoints/mobilenet/fer2013_frozen80_best.pth \
+  --model mobilenet \
+  --dataset fer2013 \
+  --device cpu \
+  --gradcam \
+  --max-faces 3
+```
+
+Press `q`, `Q`, or `Esc` while the OpenCV video window is focused to quit the webcam demo.
+
+## Demo Video
+
+If you want to view the demo without running the webcam locally, use the recorded demo video:
+
+```text
+Add demo video link here, for example a GitHub Release asset, Google Drive link, or YouTube/unlisted link.
 ```
 
 ---
