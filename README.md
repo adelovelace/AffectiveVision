@@ -107,7 +107,7 @@ wandb login
 Model checkpoints are **not committed to git** because they are large binary files. To run the live demo without retraining, download the checkpoint archive from the project release page:
 
 ```text
-https://github.com/YOUR_USERNAME/AffectiveVision/releases
+https://github.com/adelovelace/AffectiveVision/releases
 ```
 
 Download:
